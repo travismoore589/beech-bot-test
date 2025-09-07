@@ -26,11 +26,11 @@ module.exports = {
         },
 
         downloadHandler: async (interaction, guildManager) => {
-        console.info(`DOWNLOAD command invoked by guild: ${interaction.guildId}`);
+        console.info(`DOWNLOAD command invoked by guild: ${interaction.guildid}`);
         await interaction.deferReply({ ephemeral: true });
         let content = '';
         try {
-            const allQuotesFromServer = await queries.fetchAllQuotes(interaction.guildId);
+            const allQuotesFromServer = await queries.fetchAllQuotes(interaction.guildid);
             if (allQuotesFromServer.length === 0) {
                 await interaction.followUp('There haven\'t been any quotes saved from this server, so I didn\'t attach a file.');
                 return;
@@ -64,7 +64,7 @@ module.exports = {
         await utilities.validateAddCommand(quote, author, date, interaction);
         console.info(`SAID BY: ${author}`);
         if (!interaction.replied) {
-            const result = await queries.addQuote(quote, author, interaction.guildId, date).catch(async (e) => {
+            const result = await queries.addQuote(quote, author, interaction.guildid, date).catch(async (e) => {
                 if (e.message.includes('duplicate key')) {
                     await interaction.reply({
                         content: responseMessages.DUPLICATE_QUOTE,
@@ -87,8 +87,8 @@ module.exports = {
         const author = interaction.options.getString('author')?.trim();
         try {
             const queryResult = author && author.length > 0
-                ? await queries.fetchQuoteCountByAuthor(author, interaction.guildId)
-                : await queries.fetchQuoteCount(interaction.guildId);
+                ? await queries.fetchQuoteCountByAuthor(author, interaction.guildid)
+                : await queries.fetchQuoteCount(interaction.guildid);
             if (queryResult.length > 0) {
                 if (author) {
                     await interaction.reply('**' + author + '** has said **' + queryResult[0].count + '** quote(s).');
@@ -110,8 +110,8 @@ module.exports = {
         const author = interaction.options.getString('author')?.trim();
         try {
             const queryResult = author && author.length > 0
-                ? await queries.getQuotesFromAuthor(author, interaction.guildId)
-                : await queries.fetchAllQuotes(interaction.guildId);
+                ? await queries.getQuotesFromAuthor(author, interaction.guildid)
+                : await queries.fetchAllQuotes(interaction.guildid);
             if (queryResult.length > 0) {
                 const randomQuote = queryResult[Math.floor(Math.random() * queryResult.length)];
                 await interaction.reply(await utilities.formatQuote(randomQuote, true));
@@ -158,7 +158,7 @@ module.exports = {
 
     deleteHandler: async (interaction) => {
         await interaction.deferReply();
-        console.info(`DELETE command invoked by guild: ${interaction.guildId}`);
+        console.info(`DELETE command invoked by guild: ${interaction.guildid}`);
         let searchResults;
         try {
             searchResults = await utilities.getQuoteSearchResults(interaction);
@@ -186,7 +186,7 @@ module.exports = {
         const collectorFilter = i => i.user.id === interaction.user.id;
         try {
             const choice = await response.awaitMessageComponent({ filter: collectorFilter, time: 60_000 });
-            queries.deleteQuoteById(choice.customId, interaction.guildId)
+            queries.deleteQuoteByid(choice.customid, interaction.guildid)
                 .then(async (result) => {
                     if (result.length === 0) {
                         await choice.update({ content: responseMessages.NOTHING_DELETED, components: [] });
@@ -235,7 +235,7 @@ module.exports = {
 
         const buttons = searchResults.map(quote =>
             new ButtonBuilder()
-            .setCustomId(`edit:${quote.id}`)
+            .setCustomid(`edit:${quote.id}`)
             .setLabel(`Edit #${quote.id}`)
             .setStyle(ButtonStyle.Primary)
         );
@@ -253,7 +253,7 @@ module.exports = {
         const collectorFilter = (i) => 
             i.isButton() &&
             i.user?.id === interaction.user.id &&
-            i.custom.Id?.startsWith(`edit:`);
+            i.custom.id?.startsWith(`edit:`);
         let choice;
         try {
             choice = await response.awaitMessageComponent({ filter: collectorFilter, time: 60_000 });
@@ -261,7 +261,7 @@ module.exports = {
           await interaction.editReply({ content: `A quote was not chosen within 60 seconds, so I cancelled teh interaction.`, components: [] });
           return;
         }
-        const id = choice.customId.split(':')[1];
+        const id = choice.customid.split(':')[1];
 
         const current = searchResults.find(quote => String(quote.id) === String(id));
         if (!current) {
@@ -283,9 +283,9 @@ module.exports = {
         const authorInput = new TextInputBuilder()
             .setCustomId(`edit_author`)
             .setLabel(`new author (leave as-is if no change)`)
-            .setStyle(TextInputStyle.Paragraph)
+            .setStyle(TextInputStyle.Short)
             .setRequired(false)
-            .setValue(current.quotation ?? ``);
+            .setValue(current.author ?? ``);
             
         modal.addComponents(
             new ActionRowBuilder().addComponents(quoteInput),
@@ -297,13 +297,15 @@ module.exports = {
         let submitted;
         try {
             submitted = await interaction.client.awaitModalSubmit({
-                filter: (m) => m.user.id === interaction.user.id && m.customId === `editModal:${id}`,
+                filter: (m) => m.user.id === interaction.user.id && m.customid === `editModal:${id}`,
                 time: 120_00
             });
         } catch {
           try { await response.edit({ components: [] }); } catch {}
           return;
         }
+
+        await submitted.deferReply({ ephermeral: true });
 
         const newQuotation = submitted.fields.getTextInputValue(`edit_quotation`)?.trim();
         const newAuthor = submitted.fields.getTextInputValue(`edit_author`)?.trim();
@@ -312,7 +314,7 @@ module.exports = {
             (new Quotation === (current.quotation ?? ``)) &&
             (newAuthor === (current.author ?? ``));
         if (noChange) {
-            await submitted.reply({ content: `No changes made.`, ephemeral: true });
+            await submitted.editReply({ content: `No changes made.` });
             try { await response.edit({ components: [] }); } catch {}
             return;
         }
@@ -327,7 +329,7 @@ module.exports = {
             );
 
             if (!updatedRows || updatedRows.length === 0) {
-                await submitted.reply({ content: `Update failed.`, ephemeral: true });
+                await submitted.editReply({ content: `Update failed.` });
                 try { await response.edit({ components: [] }); } catch {}
                 return;
             }
@@ -335,8 +337,7 @@ module.exports = {
             const beforeBlock = await utilities.formatQuote(before, true);
             const afterBlock = await utilities.formatQuote(updatedRows[0], true);
 
-            await submitted.reply({
-                content: [
+            await submitted.editReply([
                     `**Quote ${id} updated.`,
                     '',
                     `**Before**`,
@@ -345,8 +346,8 @@ module.exports = {
                     `**After**`,
                     '',
                     afterBlock
-                ].join('\n')
-            });
+                ].join('\n'));
+            
 
             try { await response.edit({ components: [] }); } catch {}
         } catch (e) {
@@ -356,12 +357,12 @@ module.exports = {
         },
 
     wordcloudHandler: async (interaction) => {
-        console.info(`WORDCLOUD command invoked by guild: ${interaction.guildId}`);
+        console.info(`WORDCLOUD command invoked by guild: ${interaction.guildid}`);
         await interaction.deferReply();
         const author = interaction.options.getString('author')?.trim();
         const quotesForCloud = author && author.length > 0
-        ? await queries.getQuotesFromAuthor(author, interaction.guildId)
-        : await queries.fetchAllQuotes(interaction.guildId);
+        ? await queries.getQuotesFromAuthor(author, interaction.guildid)
+        : await queries.fetchAllQuotes(interaction.guildid);
     if (quotesForCloud.length === 0) {
         await interaction.followUp({
             content: 'There were no quotes to generate a word cloud.',
