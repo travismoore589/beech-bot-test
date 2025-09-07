@@ -291,6 +291,7 @@ module.exports = {
 
         await choice.showModal(modal);
 
+        let submitted;
         try {
             submitted = await interaction.client.awaitModalSubmit({
                 filter: (m) => m.user.id === interaction.user.id && m.customId === `editModal:${id}`,
@@ -314,6 +315,8 @@ module.exports = {
         }
 
         try {
+            const before = current;
+
             const updatedRows = await queries.updateQuoteById(
                 id,
                 interaction.guildID,
@@ -326,7 +329,7 @@ module.exports = {
                 return;
             }
 
-            const beforeBlock = await utilities.formatQuote(current, true);
+            const beforeBlock = await utilities.formatQuote(before, true);
             const afterBlock = await utilities.formatQuote(updatedRows[0], true);
 
             await submitted.reply({
