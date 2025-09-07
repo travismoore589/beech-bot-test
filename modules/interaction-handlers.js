@@ -1,7 +1,7 @@
 const responseMessages = require('./response-messages.js');
 const queries = require('../database/queries.js');
 const { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const wordcloudConstructor = require('../modules/wordcloud-constructor.js');
+const wordcloudConstructor = require('./modules/wordcloud-constructor.js');
 const { JSDOM } = require('jsdom');
 const sharp = require('sharp');
 const constants = require('./constants.js');
