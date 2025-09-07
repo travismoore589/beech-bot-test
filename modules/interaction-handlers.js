@@ -235,7 +235,7 @@ module.exports = {
 
         const buttons = searchResults.map(quote =>
             new ButtonBuilder()
-            .setCustomid(`edit:${quote.id}`)
+            .setCustomId(`edit:${quote.id}`)
             .setLabel(`Edit #${quote.id}`)
             .setStyle(ButtonStyle.Primary)
         );
@@ -261,7 +261,7 @@ module.exports = {
           await interaction.editReply({ content: `A quote was not chosen within 60 seconds, so I cancelled teh interaction.`, components: [] });
           return;
         }
-        const id = choice.customid.split(':')[1];
+        const id = choice.customId.split(':')[1];
 
         const current = searchResults.find(quote => String(quote.id) === String(id));
         if (!current) {

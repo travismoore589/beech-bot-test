@@ -20,29 +20,44 @@ for (const file of commandFiles) {
     BOT.commands.set(command.data.name, command);
 }
 
-BOT.once('ready', () => {
-BOT.user.setStatus('available');
-    BOT.user.setActivity('cursed quotes', { type: 'LISTENING',
-    
-    });
-    console.log('Ready!');
+BOT.once(Events.ClientReady, () => {
+  BOT.user.setPresence({
+    status: 'online', // 'online' | 'idle' | 'dnd' | 'invisible'
+    activities: [{ name: 'cursed quotes', type: ActivityType.Listening }]
+  });
+  console.log(`Ready! Logged in as ${BOT.user.tag}`);
 });
 
-BOT.login(process.env.TOKEN).then(() => {
-    console.log('bot successfully logged in');
-});
+BOT.login(process.env.TOKEN)
+  .then(() => console.log('bot successfully logged in'))
+  .catch(err => console.error('login error:', err));
 
 BOT.on('interactionCreate', async interaction => {
-    if (!interaction.isCommand()) return;
+    if (!interaction.isChatInputCommand()) return;
 
     const command = BOT.commands.get(interaction.commandName);
-
     if (!command) return;
 
     try {
-        await command.execute(interaction);
-    } catch (error) {
-        console.error(error);
-        await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
+    await command.execute(interaction);
+  } catch (error) {
+    console.error(error);
+    
+    const fallback =
+      responseMessages?.GENERIC_INTERACTION_ERROR
+      || 'There was an error while executing this command.';
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp({ content: fallback, ephemeral: true });
+      } else {
+        await interaction.reply({ content: fallback, ephemeral: true });
+      }
+    } catch (e) {
+      console.error('secondary error while reporting failure:', e);
     }
+  }
 });
+
+
+process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
+process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
