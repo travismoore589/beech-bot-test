@@ -114,7 +114,7 @@ module.exports = {
                 : await queries.fetchAllQuotes(interaction.guildId);
             if (queryResult.length > 0) {
                 const randomQuote = queryResult[Math.floor(Math.random() * queryResult.length)];
-                await interaction.reply(formatQuote(randomQuote, true));
+                await interaction.reply(await utilities.formatQuote(randomQuote, true));
             } else {
                 await interaction.reply(responseMessages.NO_QUOTES_BY_AUTHOR);
             }
