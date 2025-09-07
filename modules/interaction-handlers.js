@@ -7,7 +7,6 @@ const sharp = require('sharp');
 const constants = require('./constants.js');
 const utilities = require('./utilities.js');
 const search = require('../commands/search.js');
-const { TextInputStyle, TextInputStyle } = require('discord-api-types/v9');
 
 module.exports = {
 
