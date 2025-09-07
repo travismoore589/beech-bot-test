@@ -246,21 +246,38 @@ module.exports = {
         }
 
         const response = await interaction.followUp({
-            content,
-            components: rows
-        });
+  content,
+  components: rows
+});
 
-        const collectorFilter = (i) => 
-            i.isButton() &&
-            i.user?.id === interaction.user.id &&
-            i.custom.id?.startsWith(`edit:`);
-        let choice;
-        try {
-            choice = await response.awaitMessageComponent({ filter: collectorFilter, time: 60_000 });
-        } catch {
-          await interaction.editReply({ content: `A quote was not chosen within 60 seconds, so I cancelled teh interaction.`, components: [] });
-          return;
-        }
+// REPLACE your filter with this:
+const collectorFilter = (i) => {
+  // must be a button on THIS message
+  if (!i.isButton()) return false;
+  if (i.message?.id !== response.id) return false;
+
+  // guard everything before reading .id
+  const clickerId = i.user?.id;
+  const invokerId = interaction.user?.id;
+  const cid = i.customId ?? '';   // <-- was i.custom.id (typo)
+
+  if (!clickerId || !invokerId) return false;
+  return clickerId === invokerId && cid.startsWith('edit:');
+};
+
+let choice;
+try {
+  // give them up to 15 minutes to click
+  choice = await response.awaitMessageComponent({ filter: collectorFilter, time: 15 * 60_000 });
+} catch {
+  try {
+    await interaction.editReply({
+      content: 'A quote was not chosen within 15 minutes, so I cancelled teh interaction.',
+      components: []
+    });
+  } catch {}
+  return;
+}
         const id = choice.customId.split(':')[1];
 
         const current = searchResults.find(quote => String(quote.id) === String(id));
