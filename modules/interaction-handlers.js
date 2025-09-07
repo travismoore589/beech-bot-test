@@ -260,19 +260,11 @@ module.exports = {
         }
         const id = choice.customId.split(':')[1];
 
-        let currentRows;
-        try {
-            currentRows = await queries.fetchQuoteById(id, interaction.guildId);
-        } catch (e) {
-            console.error(e);
-            await choice.update({ content: responseMessages.GENERIC_INTERACTION_ERROR, components: [] });
+        const current = searchResults.find(quote => String(quote.id) === String(id));
+        if (!current) {
+            await choice.reply({ content: `Could not load quote #${id} for this server.`, ephemeral: true });
             return;
         }
-        if (!currentRows || currentRows.length === 0) {
-            await choice.update({ content: `Could not load quote #${id} for this server.`, components: [] });
-            return;
-        }
-        const current = currentRows[0];
 
         const modal = new ModalBuilder()
             .setCustomId(`editModal:${id}`)
