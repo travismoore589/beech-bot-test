@@ -1,0 +1,42 @@
+{
+  "name": "quote-bot",
+  "version": "1.0.0",
+  "description": "A discord bot for saving and displaying memorable quotes from you and your friends",
+  "main": "main.js",
+  "scripts": {
+    "test": "jasmine",
+    "start": "node deploy-commands.js && node main.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlecM33/quote-bot.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/AlecM33/quote-bot/issues"
+  },
+  "homepage": "https://github.com/AlecM33/quote-bot#readme",
+  "dependencies": {
+    "@discordjs/builders": "^1.0.0",
+    "@discordjs/rest": "^1.0.0",
+    "babel-plugin-inline-dotenv": "^1.7.0",
+    "discord-api-types": "^0.36.2",
+    "discord.js": "^13.12.0",
+    "dotenv": "^10.0.0",
+    "lib": "^5.0.1",
+    "pg": "^8.5.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.16.7",
+    "@babel/eslint-parser": "^7.16.5",
+    "@babel/plugin-transform-object-assign": "^7.16.5",
+    "@babel/preset-env": "^7.16.5",
+    "babel-eslint": "^10.1.0",
+    "babel-loader": "^8.2.3",
+    "eslint": "^8.20.0",
+    "eslint-config-standard": "^17.0.0",
+    "eslint-plugin-node": "^11.1.0",
+    "jasmine": "^4.2.1"
+  }
+}
