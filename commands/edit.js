@@ -5,6 +5,7 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('edit')
     .setDescription('edit quotes that match your search.')
+    .setDMPermission(false)
     .addStringOption(option =>
       option.setName('search_string')
         .setDescription('a keyword or keyphrase by which to search for quotes.')

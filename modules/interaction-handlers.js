@@ -250,7 +250,10 @@ module.exports = {
             components: rows
         });
 
-        const collectorFilter = i => i.user.id === interaction.user.id && i.custom.Id.startsWith(`edit`);
+        const collectorFilter = (i) => 
+            i.isButton() &&
+            i.user?.id === interaction.user.id &&
+            i.custom.Id?.startsWith(`edit:`);
         let choice;
         try {
             choice = await response.awaitMessageComponent({ filter: collectorFilter, time: 60_000 });
