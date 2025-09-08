@@ -1,11 +1,25 @@
 const responseMessages = require('./response-messages.js');
 const queries = require('../database/queries.js');
 const { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-const { JSDOM } = require('jsdom');
-const sharp = require('sharp');
 const constants = require('./constants.js');
 const utilities = require('./utilities.js');
 const search = require('../commands/search.js');
+
+// --- ADD THIS GUARDED BLOCK (1) ---
+let wordcloudConstructor;        // your local wrapper (same folder)
+try {
+  wordcloudConstructor = require('./wordcloud-constructor.js');
+} catch (e) {
+  console.warn('[wordcloud] module not found; disabling wordcloud:', e.message);
+}
+
+let JSDOM, sharp;                // external libs used by the handler
+try { ({ JSDOM } = require('jsdom')); }
+catch (e) { console.warn('[wordcloud] jsdom not found; disabling wordcloud:', e.message); }
+
+try { sharp = require('sharp'); }
+catch (e) { console.warn('[wordcloud] sharp not found; disabling wordcloud:', e.message); }
+// --- END ADD ---
 
 module.exports = {
 
@@ -393,70 +407,98 @@ module.exports = {
   try { await response.edit({ components: [] }); } catch (e2) { /* ignore */ }
 },
 
-    wordcloudHandler: async (interaction) => {
-        console.info(`WORDCLOUD command invoked by guild: ${interaction.guildId}`);
-        await interaction.deferReply();
-        const author = interaction.options.getString('author')?.trim();
-        const quotesForCloud = author && author.length > 0
-        ? await queries.getQuotesFromAuthor(author, interaction.guildId)
-        : await queries.fetchAllQuotes(interaction.guildId);
-    if (quotesForCloud.length === 0) {
-        await interaction.followUp({
-            content: 'There were no quotes to generate a word cloud.',
-            ephemeral: true
+    // inside module.exports = { ... }
+
+wordcloudHandler: async (interaction) => {
+  console.info(`WORDCLOUD command invoked by guild: ${interaction.guildId}`);
+
+  // If any dependency is missing, exit gracefully BEFORE deferring.
+  if (!wordcloudConstructor || !JSDOM || !sharp) {
+    const { MessageFlags } = require('discord.js');
+    await interaction.reply({
+      content: 'Wordcloud feature is not available on this deployment.',
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  await interaction.deferReply(); // we’ll edit this later
+
+  const author = interaction.options.getString('author')?.trim();
+  const quotesForCloud = (author && author.length > 0)
+    ? await queries.getQuotesFromAuthor(author, interaction.guildId)
+    : await queries.fetchAllQuotes(interaction.guildId);
+
+  if (!quotesForCloud || quotesForCloud.length === 0) {
+    const { MessageFlags } = require('discord.js');
+    // since we deferred, use editReply (you can’t mark edited replies ephemeral;
+    // send a follow-up ephemeral instead if you prefer keeping it private)
+    await interaction.editReply('There were no quotes to generate a word cloud.');
+    await interaction.followUp({
+      content: 'Tip: use `/save` to add quotes, then try again.',
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+
+  try {
+    const nodeDocument = new JSDOM().window.document;
+    const wordsWithOccurrences = utilities.mapQuotesToFrequencies(quotesForCloud);
+
+    // your module can be a value or a promise; await works either way
+    const constructor = await wordcloudConstructor;
+
+    const initializationResult = constructor.initialize(
+      wordsWithOccurrences
+        .sort((a, b) => a.frequency >= b.frequency ? -1 : 1)
+        .slice(0, constants.MAX_WORDCLOUD_WORDS),
+      constants.WORDCLOUD_SIZE,
+      nodeDocument,
+      interaction.options.getString('font')?.toLowerCase().trim()
+    );
+
+    initializationResult.cloud.on('end', () => {
+      const d3 = constructor.draw(
+        initializationResult.cloud,
+        initializationResult.words,
+        nodeDocument.body,
+        interaction.options.getString('font')?.toLowerCase().trim()
+      );
+
+      const buffer = Buffer.from(
+        d3.select(nodeDocument.body).node().innerHTML.toString()
+      );
+
+      sharp(buffer)
+        .resize(constants.WORDCLOUD_SIZE, constants.WORDCLOUD_SIZE)
+        .png()
+        .toBuffer()
+        .then(async (data) => {
+          let content = author && author.length > 0
+            ? `Here’s a word cloud for quotes said by “${author}”!`
+            : `Here’s a word cloud generated from all quotes!`;
+
+          const reqFont = interaction.options.getString('font')?.toLowerCase().trim();
+          if (reqFont && !constructor.CONFIG.FONTS[reqFont]) {
+            content += ' I can’t use that font. Available fonts: Arial, Baskerville Old Face, Calibri, Century Gothic, Comic Sans MS, Consolas, Courier New, Georgia, Impact, Rockwell, Segoe UI, Tahoma, Times New Roman, Trebuchet MS, Verdana.';
+          }
+
+          // Since we deferred, edit the original reply with the image
+          await interaction.editReply({
+            files: [new AttachmentBuilder(data, { name: 'wordcloud.png' })],
+            content
+          });
+        })
+        .catch(async (err) => {
+          console.error(err);
+          await interaction.editReply({ content: responseMessages.GENERIC_INTERACTION_ERROR });
         });
-        return;
-    }
-    try {
-        const nodeDocument = new JSDOM().window.document;
-        const wordsWithOccurrences = utilities.mapQuotesToFrequencies(quotesForCloud);
-        const constructor = await wordcloudConstructor;
-        const initializationResult = constructor.initialize(
-            wordsWithOccurrences
-                .sort((a, b) => a.frequency >= b.frequency ? -1 : 1)
-                .slice(0, constants.MAX_WORDCLOUD_WORDS),
-            constants.WORDCLOUD_SIZE,
-            nodeDocument,
-            interaction.options.getString('font')?.toLowerCase().trim()
-        );
-        initializationResult.cloud.on('end', () => {
-            const d3 = constructor.draw(
-                initializationResult.cloud,
-                initializationResult.words,
-                nodeDocument.body,
-                interaction.options.getString('font')?.toLowerCase().trim()
-            );
-            const buffer = Buffer.from(d3.select(nodeDocument.body).node().innerHTML.toString());
-            sharp(buffer)
-                .resize(constants.WORDCLOUD_SIZE, constants.WORDCLOUD_SIZE)
-                .png()
-                .toBuffer()
-                .then(async data => {
-                    let content = author && author.length > 0
-                        ? 'Here\'s a word cloud for quotes said by "' + author + '"!'
-                        : 'Here\'s a word cloud generated from all quotes!';
-                    if (interaction.options.getString('font')
-                        && !constructor.CONFIG.FONTS[interaction.options.getString('font')?.toLowerCase().trim()]) {
-                        content += 'I can\'t use that font. Here are the available fonts: Arial, Baskerville Old Face, Calibri, Century Gothic, Comic Sans MS, Consolas, Courier New, Georgia, Impact, Rockwell, Segoe UI, Tahoma, Times New Roman, Trebuchet MS, Verdana.';
-                    }
-                    await interaction.followUp({
-                        files: [new AttachmentBuilder(data, {name: 'wordcloud.png' })],
-                        content
-                    });
-                })
-                .catch(async err => {
-                    console.error(err);
-                    await interaction.followUp({
-                        content: responseMessages.GENERIC_INTERACTION_ERROR
-                    });
-                });
-        });
-        initializationResult.cloud.start();
-    } catch (e) {
-        console.error(e);
-        await interaction.followUp({
-            content: responseMessages.GENERIC_INTERACTION_ERROR
-        });
-    }
-    }
+    });
+
+    initializationResult.cloud.start();
+  } catch (e) {
+    console.error(e);
+    await interaction.editReply({ content: responseMessages.GENERIC_INTERACTION_ERROR });
+  }
+}
 };
