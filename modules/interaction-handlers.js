@@ -3,7 +3,6 @@ const queries = require('../database/queries.js');
 const { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const constants = require('./constants.js');
 const utilities = require('./utilities.js');
-const search = require('../commands/search.js');
 
 // --- ADD THIS GUARDED BLOCK (1) ---
 let wordcloudConstructor;        // your local wrapper (same folder)
@@ -139,36 +138,50 @@ module.exports = {
     },
 
     searchHandler: async (interaction) => {
-        console.info(`SEARCH command invoked by guild: ${interaction.guildId}`);
-        await interaction.deferReply();
-        let searchResults;
-        try {
-            searchResults = await utilities.getQuoteSearchResults(interaction);
-        } catch (e) {
-            console.error(e);
-            await interaction.followUp({ content: responseMessages.GENERIC_INTERACTION_ERROR });
-            return;
-        }
-        let reply = '';
-        if (searchResults.length === 0) {
-            reply += responseMessages.EMPTY_QUERY;
-        } else if (searchResults.length > constants.MAX_SEARCH_RESULTS) {
-            reply += responseMessages.QUERY_TOO_GENERAL;
-        } else {
-            for (const result of searchResults) {
-                const quote = await utilities.formatQuote(result, true);
-                reply += quote + '\n';
-            }
-        }
+  console.info(`SEARCH command invoked by guild: ${interaction.guildId}`);
 
-        if (!interaction.replied) {
-            if (reply.length > constants.MAX_DISCORD_MESSAGE_LENGTH) {
-                await interaction.followUp({ content: responseMessages.SEARCH_RESULT_TOO_LONG });
-            } else {
-                await interaction.followUp({ content: reply });
-            }
-        }
-    },
+  // guild-only? (optional)
+  if (!interaction.guildId) {
+    await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+    return;
+  }
+
+  // Defer, then edit the same reply instead of mixing followUp
+  await interaction.deferReply();
+
+  let searchResults;
+  try {
+    searchResults = await utilities.getQuoteSearchResults(interaction);
+  } catch (e) {
+    console.error(e);
+    await interaction.editReply({ content: responseMessages.GENERIC_INTERACTION_ERROR });
+    return;
+  }
+
+  // limit results (define this in constants if you haven’t)
+  const MAX = Number(constants?.MAX_SEARCH_RESULTS ?? 10);
+
+  if (!searchResults || searchResults.length === 0) {
+    await interaction.editReply(responseMessages.EMPTY_QUERY);
+    return;
+  }
+  if (searchResults.length > MAX) {
+    await interaction.editReply(responseMessages.QUERY_TOO_GENERAL);
+    return;
+  }
+
+  // build reply
+  let reply = '';
+  for (const result of searchResults) {
+    reply += (await utilities.formatQuote(result, true)) + '\n';
+  }
+
+  if (reply.length > constants.MAX_DISCORD_MESSAGE_LENGTH) {
+    await interaction.editReply({ content: responseMessages.SEARCH_RESULT_TOO_LONG });
+  } else {
+    await interaction.editReply({ content: reply });
+  }
+},
 
     deleteHandler: async (interaction) => {
         await interaction.deferReply();
@@ -224,37 +237,38 @@ module.exports = {
     editHandler: async (interaction) => {
   console.info(`EDIT command invoked by guild: ${interaction.guildId}`);
 
-  // must be in a server (guild)
+  // Guild-only guard
   if (!interaction.guildId) {
     await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
     return;
   }
 
-  // give us breathing room to search
+  // Give us time to search
   await interaction.deferReply();
 
-  // 1) search (reuses your delete flow helper)
+  // 1) Search results (reuse your helper)
   let searchResults;
   try {
     searchResults = await utilities.getQuoteSearchResults(interaction);
   } catch (e) {
     console.error(e);
-    await interaction.followUp({ content: responseMessages.GENERIC_INTERACTION_ERROR });
+    await interaction.editReply({ content: responseMessages.GENERIC_INTERACTION_ERROR });
     return;
   }
 
-  if (searchResults.length === 0) {
-    await interaction.followUp(responseMessages.EMPTY_QUERY);
+  if (!searchResults || searchResults.length === 0) {
+    await interaction.editReply(responseMessages.EMPTY_QUERY);
     return;
-  } else if (searchResults.length > constants.MAX_DELETE_SEARCH_RESULTS) {
-    await interaction.followUp(responseMessages.DELETE_QUERY_TOO_GENERAL);
+  }
+  if (searchResults.length > constants.MAX_DELETE_SEARCH_RESULTS) {
+    await interaction.editReply(responseMessages.DELETE_QUERY_TOO_GENERAL);
     return;
   }
 
-  // 2) build the list + buttons
+  // 2) Build listing + buttons
   let content = `Found **${searchResults.length}** matching quote(s). Choose one to edit:\n\n`;
-  for (const quote of searchResults) {
-    content += (await utilities.formatQuote(quote, true, true)) + '\n';
+  for (const q of searchResults) {
+    content += (await utilities.formatQuote(q, true, true)) + '\n';
   }
 
   const buttons = searchResults.map(q =>
@@ -269,12 +283,13 @@ module.exports = {
     rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
   }
 
-  const response = await interaction.followUp({
+  // Show the list on the original deferred reply
+  const response = await interaction.editReply({
     content,
     components: rows
   });
 
-  // 3) wait for the user's button click (defensive filter)
+  // 3) Wait for the invoker to click one of OUR edit buttons
   const collectorFilter = (i) => {
     if (!i.isButton()) return false;
     if (i.message?.id !== response.id) return false;
@@ -289,7 +304,7 @@ module.exports = {
 
   let choice;
   try {
-    // give them up to 15 minutes to click
+    // Let them take up to 15 minutes to choose
     choice = await response.awaitMessageComponent({
       filter: collectorFilter,
       time: 15 * 60_000
@@ -300,20 +315,20 @@ module.exports = {
         content: 'A quote was not chosen within 15 minutes, so I cancelled the interaction.',
         components: []
       });
-    } catch (e2) { /* ignore */ }
+    } catch {}
     return;
   }
 
   const id = choice.customId.split(':')[1];
 
-  // 4) prefill from the in-memory search results (no DB yet)
+  // 4) Prefill from in-memory results (no DB yet)
   const current = searchResults.find(q => String(q.id) === String(id));
   if (!current) {
     await choice.reply({ content: `Could not load quote #${id} for this server.`, ephemeral: true });
     return;
   }
 
-  // 5) show modal immediately (ack the button within ~3s)
+  // 5) Build and show the modal IMMEDIATELY (this acknowledges the button)
   const modal = new ModalBuilder()
     .setCustomId(`editModal:${id}`)
     .setTitle(`Edit Quote #${id}`);
@@ -339,39 +354,70 @@ module.exports = {
 
   await choice.showModal(modal);
 
-  // 6) wait for the modal submit (ack fast, then do DB)
-  let submitted;
+  // 6) Wait for the modal submit — listen defensively and ACK fast
+  const { Events } = require('discord.js');
+  const client = interaction.client;
+
+  const submitted = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      client.off(Events.InteractionCreate, onInteraction);
+      reject(new Error('Modal submit timed out'));
+    }, 120_000); // 2 minutes
+
+    const onInteraction = (i) => {
+      try {
+        if (!i || typeof i.isModalSubmit !== 'function' || !i.isModalSubmit()) return;
+        const cid = i.customId ?? '';
+        const submitterId = i.user?.id;
+        const invokerId = interaction.user?.id;
+        if (!submitterId || !invokerId) return;
+        if (submitterId !== invokerId) return;
+        if (cid !== `editModal:${id}`) return;
+
+        clearTimeout(timeout);
+        client.off(Events.InteractionCreate, onInteraction);
+        resolve(i);
+      } catch (err) {
+        console.error('modal submit handler error (ignored):', err);
+      }
+    };
+
+    client.on(Events.InteractionCreate, onInteraction);
+  }).catch(async () => {
+    try {
+      await response.edit({
+        content: 'A quote was not chosen within 2 minutes, so I cancelled the interaction.',
+        components: []
+      });
+    } catch {}
+    return null;
+  });
+
+  if (!submitted) return;
+
+  // ACK the modal submit immediately (gives you ~15 minutes)
   try {
-    submitted = await interaction.client.awaitModalSubmit({
-      filter: (m) =>
-        m.isModalSubmit() &&
-        m.user?.id === interaction.user?.id &&
-        m.customId === `editModal:${id}`,
-      time: 120_000
-    });
+    await submitted.deferReply({ ephemeral: true });
   } catch (e) {
-    try { await response.edit({ components: [] }); } catch (e2) { /* ignore */ }
+    console.error('deferReply on modal submit failed:', e);
     return;
   }
 
-  // acknowledge the submit so we have up to 15 mins for DB
-  await submitted.deferReply({ ephemeral: true });
-
-  // 7) read fields
+  // 7) Read fields
   const newQuotation = submitted.fields.getTextInputValue('edit_quotation')?.trim();
   const newAuthor    = submitted.fields.getTextInputValue('edit_author')?.trim();
 
-  // 8) no-change short-circuit
+  // 8) No-change short-circuit
   const noChange =
     (newQuotation === (current.quotation ?? '')) &&
     (newAuthor === (current.author ?? ''));
   if (noChange) {
     await submitted.editReply({ content: 'No changes made.' });
-    try { await response.edit({ components: [] }); } catch (e2) { /* ignore */ }
+    try { await response.edit({ components: [] }); } catch {}
     return;
   }
 
-  // 9) persist and show before/after
+  // 9) Persist and show before/after
   let updatedRows;
   try {
     updatedRows = await queries.updateQuoteById(
@@ -403,8 +449,8 @@ module.exports = {
     afterBlock
   ].join('\n'));
 
-  // optional: remove buttons in the original list message
-  try { await response.edit({ components: [] }); } catch (e2) { /* ignore */ }
+  // Optional: remove the buttons on the original list message
+  try { await response.edit({ components: [] }); } catch {}
 },
 
     // inside module.exports = { ... }
