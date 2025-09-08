@@ -208,170 +208,190 @@ module.exports = {
     },
 
     editHandler: async (interaction) => {
-        console.info(`EDIT command invoked by guild: ${interaction.guildId}`);
-        await interaction.deferReply();
+  console.info(`EDIT command invoked by guild: ${interaction.guildId}`);
 
-        let searchResults;
-        try {
-            searchResults = await utilities.getQuoteSearchResults(interaction);
-        }   catch (e) {
-            console.error(e);
-            await interaction.followUp({ content: responseMessages.GENERIC_INTERACTION_ERROR });
-            return;
-        }
+  // must be in a server (guild)
+  if (!interaction.guildId) {
+    await interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+    return;
+  }
 
-        if (searchResults.length === 0) {
-            await interaction.followUp(responseMessages.EMPTY_QUERY);
-            return;
-        } else if (searchResults.length > constants.MAX_DELETE_SEARCH_RESULTS) {
-          await interaction.followUp(responseMessages.DELETE_QUERY_TOO_GENERAL);
-          return;
-        }
+  // give us breathing room to search
+  await interaction.deferReply();
 
-        let content = `Found **${searchResults.length}** matching quote(s). Choose one to edit:\n\n`;
-        for (const quote of searchResults) {
-            content += (await utilities.formatQuote(quote, true, true)) + `\n`;
-        }
-
-        const buttons = searchResults.map(quote =>
-            new ButtonBuilder()
-            .setCustomId(`edit:${quote.id}`)
-            .setLabel(`Edit #${quote.id}`)
-            .setStyle(ButtonStyle.Primary)
-        );
-
-        const rows =[];
-        for (let i = 0; i < buttons.length; i += 5) {
-            rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
-        }
-
-        const response = await interaction.followUp({
-  content,
-  components: rows
-});
-
-// REPLACE your filter with this:
-const collectorFilter = (i) => {
-  // must be a button on THIS message
-  if (!i.isButton()) return false;
-  if (i.message?.id !== response.id) return false;
-
-  // guard everything before reading .id
-  const clickerId = i.user?.id;
-  const invokerId = interaction.user?.id;
-  const cid = i.customId ?? '';   // <-- was i.custom.id (typo)
-
-  if (!clickerId || !invokerId) return false;
-  return clickerId === invokerId && cid.startsWith('edit:');
-};
-
-let choice;
-try {
-  // give them up to 15 minutes to click
-  choice = await response.awaitMessageComponent({ filter: collectorFilter, time: 15 * 60_000 });
-} catch {
+  // 1) search (reuses your delete flow helper)
+  let searchResults;
   try {
-    await interaction.editReply({
-      content: 'A quote was not chosen within 15 minutes, so I cancelled teh interaction.',
-      components: []
+    searchResults = await utilities.getQuoteSearchResults(interaction);
+  } catch (e) {
+    console.error(e);
+    await interaction.followUp({ content: responseMessages.GENERIC_INTERACTION_ERROR });
+    return;
+  }
+
+  if (searchResults.length === 0) {
+    await interaction.followUp(responseMessages.EMPTY_QUERY);
+    return;
+  } else if (searchResults.length > constants.MAX_DELETE_SEARCH_RESULTS) {
+    await interaction.followUp(responseMessages.DELETE_QUERY_TOO_GENERAL);
+    return;
+  }
+
+  // 2) build the list + buttons
+  let content = `Found **${searchResults.length}** matching quote(s). Choose one to edit:\n\n`;
+  for (const quote of searchResults) {
+    content += (await utilities.formatQuote(quote, true, true)) + '\n';
+  }
+
+  const buttons = searchResults.map(q =>
+    new ButtonBuilder()
+      .setCustomId(`edit:${q.id}`)
+      .setLabel(`Edit #${q.id}`)
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 5) {
+    rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+  }
+
+  const response = await interaction.followUp({
+    content,
+    components: rows
+  });
+
+  // 3) wait for the user's button click (defensive filter)
+  const collectorFilter = (i) => {
+    if (!i.isButton()) return false;
+    if (i.message?.id !== response.id) return false;
+
+    const clickerId = i.user?.id;
+    const invokerId = interaction.user?.id;
+    const cid = i.customId ?? '';
+
+    if (!clickerId || !invokerId) return false;
+    return clickerId === invokerId && cid.startsWith('edit:');
+  };
+
+  let choice;
+  try {
+    // give them up to 15 minutes to click
+    choice = await response.awaitMessageComponent({
+      filter: collectorFilter,
+      time: 15 * 60_000
     });
-  } catch {}
-  return;
-}
-        const id = choice.customId.split(':')[1];
+  } catch (e) {
+    try {
+      await interaction.editReply({
+        content: 'A quote was not chosen within 15 minutes, so I cancelled the interaction.',
+        components: []
+      });
+    } catch (e2) { /* ignore */ }
+    return;
+  }
 
-        const current = searchResults.find(quote => String(quote.id) === String(id));
-        if (!current) {
-            await choice.reply({ content: `Could not load quote #${id} for this server.`, ephemeral: true });
-            return;
-        }
+  const id = choice.customId.split(':')[1];
 
-        const modal = new ModalBuilder()
-            .setCustomId(`editModal:${id}`)
-            .setTitle(`Edit Quote #${id}`);
+  // 4) prefill from the in-memory search results (no DB yet)
+  const current = searchResults.find(q => String(q.id) === String(id));
+  if (!current) {
+    await choice.reply({ content: `Could not load quote #${id} for this server.`, ephemeral: true });
+    return;
+  }
 
-        const quoteInput = new TextInputBuilder()
-            .setCustomId(`edit_quotation`)
-            .setLabel(`new quote text (leave as-is if no change)`)
-            .setStyle(TextInputStyle.Paragraph)
-            .setRequired(false)
-            .setValue(current.quotation ?? ``);
+  // 5) show modal immediately (ack the button within ~3s)
+  const modal = new ModalBuilder()
+    .setCustomId(`editModal:${id}`)
+    .setTitle(`Edit Quote #${id}`);
 
-        const authorInput = new TextInputBuilder()
-            .setCustomId(`edit_author`)
-            .setLabel(`new author (leave as-is if no change)`)
-            .setStyle(TextInputStyle.Short)
-            .setRequired(false)
-            .setValue(current.author ?? ``);
-            
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(quoteInput),
-            new ActionRowBuilder().addComponents(authorInput)
-        );
+  const quoteInput = new TextInputBuilder()
+    .setCustomId('edit_quotation')
+    .setLabel('New quote text (leave as-is if no change)')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setValue(current.quotation ?? '');
 
-        await choice.showModal(modal);
+  const authorInput = new TextInputBuilder()
+    .setCustomId('edit_author')
+    .setLabel('New author (leave as-is if no change)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setValue(current.author ?? '');
 
-        let submitted;
-        try {
-            submitted = await interaction.client.awaitModalSubmit({
-                filter: (m) => m.user.id === interaction.user.id && m.customid === `editModal:${id}`,
-                time: 120_00
-            });
-        } catch {
-          try { await response.edit({ components: [] }); } catch {}
-          return;
-        }
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(quoteInput),
+    new ActionRowBuilder().addComponents(authorInput)
+  );
 
-        await submitted.deferReply({ ephermeral: true });
+  await choice.showModal(modal);
 
-        const newQuotation = submitted.fields.getTextInputValue(`edit_quotation`)?.trim();
-        const newAuthor = submitted.fields.getTextInputValue(`edit_author`)?.trim();
+  // 6) wait for the modal submit (ack fast, then do DB)
+  let submitted;
+  try {
+    submitted = await interaction.client.awaitModalSubmit({
+      filter: (m) =>
+        m.isModalSubmit() &&
+        m.user?.id === interaction.user?.id &&
+        m.customId === `editModal:${id}`,
+      time: 120_000
+    });
+  } catch (e) {
+    try { await response.edit({ components: [] }); } catch (e2) { /* ignore */ }
+    return;
+  }
 
-        const noChange =
-            (newQuotation === (current.quotation ?? ``)) &&
-            (newAuthor === (current.author ?? ``));
-        if (noChange) {
-            await submitted.editReply({ content: `No changes made.` });
-            try { await response.edit({ components: [] }); } catch {}
-            return;
-        }
+  // acknowledge the submit so we have up to 15 mins for DB
+  await submitted.deferReply({ ephemeral: true });
 
-        try {
-            const before = current;
+  // 7) read fields
+  const newQuotation = submitted.fields.getTextInputValue('edit_quotation')?.trim();
+  const newAuthor    = submitted.fields.getTextInputValue('edit_author')?.trim();
 
-            const updatedRows = await queries.updateQuoteById(
-                id,
-                interaction.guildId,
-                { quotation: newQuotation, author: newAuthor }
-            );
+  // 8) no-change short-circuit
+  const noChange =
+    (newQuotation === (current.quotation ?? '')) &&
+    (newAuthor === (current.author ?? ''));
+  if (noChange) {
+    await submitted.editReply({ content: 'No changes made.' });
+    try { await response.edit({ components: [] }); } catch (e2) { /* ignore */ }
+    return;
+  }
 
-            if (!updatedRows || updatedRows.length === 0) {
-                await submitted.editReply({ content: `Update failed.` });
-                try { await response.edit({ components: [] }); } catch {}
-                return;
-            }
+  // 9) persist and show before/after
+  let updatedRows;
+  try {
+    updatedRows = await queries.updateQuoteById(
+      id,
+      interaction.guildId,
+      { quotation: newQuotation, author: newAuthor }
+    );
+  } catch (e) {
+    console.error('updateQuoteById error:', e);
+    await submitted.editReply({ content: responseMessages.GENERIC_INTERACTION_ERROR });
+    return;
+  }
 
-            const beforeBlock = await utilities.formatQuote(before, true);
-            const afterBlock = await utilities.formatQuote(updatedRows[0], true);
+  if (!updatedRows || updatedRows.length === 0) {
+    await submitted.editReply({ content: 'Update failed or nothing was updated.' });
+    return;
+  }
 
-            await submitted.editReply([
-                    `**Quote ${id} updated.`,
-                    '',
-                    `**Before**`,
-                    beforeBlock,
-                    ``,
-                    `**After**`,
-                    '',
-                    afterBlock
-                ].join('\n'));
-            
+  const beforeBlock = await utilities.formatQuote(current, true);
+  const afterBlock  = await utilities.formatQuote(updatedRows[0], true);
 
-            try { await response.edit({ components: [] }); } catch {}
-        } catch (e) {
-            console.error(e);
-            await submitted.reply({ content: responseMessages.GENERIC_INTERACTION_ERROR, ephemeral: true });
-        }
-        },
+  await submitted.editReply([
+    `**Quote ${id} updated.**`,
+    '',
+    '**Before**',
+    beforeBlock,
+    '',
+    '**After**',
+    afterBlock
+  ].join('\n'));
+
+  // optional: remove buttons in the original list message
+  try { await response.edit({ components: [] }); } catch (e2) { /* ignore */ }
+},
 
     wordcloudHandler: async (interaction) => {
         console.info(`WORDCLOUD command invoked by guild: ${interaction.guildId}`);
