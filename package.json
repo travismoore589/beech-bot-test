@@ -18,7 +18,7 @@
   },
   "homepage": "https://github.com/AlecM33/quote-bot#readme",
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   },
   "dependencies": {
     "@discordjs/builders": "^1.8.2",
