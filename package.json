@@ -23,6 +23,7 @@
   "dependencies": {
     "@discordjs/builders": "^1.8.2",
     "@discordjs/rest": "^2.3.0",
+    "canvas": "^2.11.2",
     "d3": "^7.9.0",
     "d3-cloud": "^1.2.7",
     "discord-api-types": "^0.37.83",
