@@ -10,6 +10,11 @@ module.exports = {
       opt.setName('search_string')
         .setDescription('a keyword or keyphrase by which to search for quotes.')
         .setRequired(true)
+    .addStringOption(opt =>
+        opt.setName('author')
+        .setDescription('narrow your search by author.')
+        .setRequired(false)
+    )
     ),
   async execute(interaction) {
     // Lazy-require to avoid circular require timing
