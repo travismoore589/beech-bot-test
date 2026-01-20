@@ -10,7 +10,6 @@ module.exports = {
     },
 
     addQuote: (quote, author, guildId, date) => {
-  // date is optional (expects MM/DD/YYYY or MM-DD-YYYY). If missing, defaults to today.
   return query({
     text: `
       INSERT INTO quotes (quotation, author, said_at, guild_id)
@@ -19,9 +18,9 @@ module.exports = {
         $2,
         COALESCE(
           CASE
-            WHEN $3 IS NULL OR btrim($3) = '' THEN NULL
-            WHEN strpos($3, '-') > 0 THEN to_date($3, 'MM-DD-YYYY')
-            ELSE to_date($3, 'MM/DD/YYYY')
+            WHEN $3::text IS NULL OR btrim($3::text) = '' THEN NULL::date
+            WHEN strpos($3::text, '-') > 0 THEN to_date($3::text, 'MM-DD-YYYY')
+            ELSE to_date($3::text, 'MM/DD/YYYY')
           END,
           CURRENT_DATE
         ),
@@ -32,7 +31,7 @@ module.exports = {
     values: [
       quote,
       author,
-      date ?? null,
+      date ?? null,   // IMPORTANT: null, not undefined
       guildId
     ]
   });
