@@ -70,30 +70,55 @@ module.exports = {
     },
     
     addHandler: async (interaction) => {
-        console.info(`ADD command invoked by guild: ${interaction.guildId}`);
-        const author = interaction.options.getString('author').trim();
-        const quote = interaction.options.getString('quote').trim();
-        const date = interaction.options.getString('date')?.trim();
-        await utilities.validateAddCommand(quote, author, date, interaction);
-        console.info(`SAID BY: ${author}`);
-        if (!interaction.replied) {
-            const result = await queries.addQuote(quote, author, interaction.guildId, date).catch(async (e) => {
-                if (e.message.includes('duplicate key')) {
-                    await interaction.reply({
-                        content: responseMessages.DUPLICATE_QUOTE,
-                        ephemeral: true
-                    });
-                } else if (e.message.includes('date/time field value out of range')) {
-                    await interaction.reply({ content: 'The date for your quote is invalid. Make sure it is in either MM/DD/YYYY or MM-DD-YYYY format.', ephemeral: true });
-                } else {
-                    await interaction.reply({ content: 'Error adding your quote: ' + e.message, ephemeral: true});
-                }
-            });
-            if (!interaction.replied) {
-                await interaction.reply('Added the following:\n\n' + await utilities.formatQuote(result[0], date !== undefined));   
-                }
-            }
-        },
+  console.info(`ADD command invoked by guild: ${interaction.guildId}`);
+
+  const author = interaction.options.getString('author', true).trim();
+  const quote  = interaction.options.getString('quote', true).trim();
+  const dateRaw = interaction.options.getString('date'); // may be null
+  const date = dateRaw ? dateRaw.trim() : null;
+
+  // Validate (only if your validator expects it). Stop if it replied.
+  try {
+    await utilities.validateAddCommand(quote, author, date, interaction);
+    if (interaction.replied || interaction.deferred) return;
+  } catch (e) {
+    console.error('validateAddCommand error:', e);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: responseMessages.GENERIC_INTERACTION_ERROR, ephemeral: true });
+    }
+    return;
+  }
+
+  console.info(`SAID BY: ${author}`);
+
+  try {
+    const result = await queries.addQuote(quote, author, interaction.guildId, date);
+
+    // Use the returned row to display the stored date (after parsing/defaulting)
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply(
+        'Added the following:\n\n' + await utilities.formatQuote(result[0], true)
+      );
+    }
+  } catch (e) {
+    console.error(e);
+
+    if (interaction.replied || interaction.deferred) return;
+
+    const msg = String(e?.message ?? e);
+
+    if (msg.includes('duplicate key')) {
+      await interaction.reply({ content: responseMessages.DUPLICATE_QUOTE, ephemeral: true });
+    } else if (msg.includes('date/time field value out of range')) {
+      await interaction.reply({
+        content: 'The date for your quote is invalid. Make sure it is in either MM/DD/YYYY or MM-DD-YYYY format.',
+        ephemeral: true
+      });
+    } else {
+      await interaction.reply({ content: 'Error adding your quote: ' + msg, ephemeral: true });
+    }
+  }
+},
 
     countHandler: async (interaction) => {
         console.info(`COUNT command invoked by guild: ${interaction.guildId}`);
