@@ -9,19 +9,34 @@ module.exports = {
         });
     },
 
-    addQuote: (quote, author, guildId) => {
-        const now = new Date(Date.now());
-
-        return query({
-            text: 'INSERT INTO quotes VALUES (DEFAULT, $1, $2, $3, $4) RETURNING quotation, author, said_at;',
-            values: [
-                quote,
-                author,
-                (now.getMonth() + 1) + '/' + now.getDate() + '/' + now.getFullYear(),
-                guildId
-            ]
-        });
-    },
+    addQuote: (quote, author, guildId, date) => {
+  // date is optional (expects MM/DD/YYYY or MM-DD-YYYY). If missing, defaults to today.
+  return query({
+    text: `
+      INSERT INTO quotes (quotation, author, said_at, guild_id)
+      VALUES (
+        $1,
+        $2,
+        COALESCE(
+          CASE
+            WHEN $3 IS NULL OR btrim($3) = '' THEN NULL
+            WHEN strpos($3, '-') > 0 THEN to_date($3, 'MM-DD-YYYY')
+            ELSE to_date($3, 'MM/DD/YYYY')
+          END,
+          CURRENT_DATE
+        ),
+        $4
+      )
+      RETURNING quotation, author, said_at;
+    `,
+    values: [
+      quote,
+      author,
+      date ?? null,
+      guildId
+    ]
+  });
+},
 
     getQuotesFromAuthor: (author, guildId) => {
         return query({
