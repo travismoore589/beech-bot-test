@@ -38,6 +38,176 @@ module.exports = {
             }
         },
 
+recapHandler: async (interaction) => {
+  console.info(`RECAP command invoked by guild: ${interaction.guildId} channel: ${interaction.channelId}`);
+
+  // Only works in text-based channels
+  const channel = interaction.channel;
+  if (!channel || !channel.isTextBased?.()) {
+    await interaction.reply({ content: 'This command can only be used in a text channel.', ephemeral: true });
+    return;
+  }
+
+  const maxMessages = Math.min(interaction.options.getInteger('messages') ?? 150, 300);
+  const hours = interaction.options.getInteger('hours'); // optional
+  const sinceTs = hours ? (Date.now() - hours * 60 * 60 * 1000) : null;
+
+  await interaction.deferReply();
+
+  // --- helpers (no extra deps) ---
+  const STOPWORDS = new Set([
+    'a','an','and','are','as','at','be','but','by','for','from','has','have','he','her','his','i','if','in','into',
+    'is','it','its','just','me','my','no','not','of','on','or','our','she','so','than','that','the','their','them',
+    'then','there','these','they','this','to','too','up','us','was','we','were','what','when','where','who','why',
+    'will','with','you','your','yours','im','dont','cant','didnt','doesnt','wont','ok','yeah','lol','lmao'
+  ]);
+
+  const clean = (s) =>
+    String(s || '')
+      .replace(/https?:\/\/\S+/g, ' ')         // remove links (we track them separately)
+      .replace(/<@!?(\d+)>/g, ' ')             // remove mentions
+      .replace(/<#[0-9]+>/g, ' ')
+      .replace(/<a?:\w+:\d+>/g, ' ')          // custom emojis
+      .replace(/[^\p{L}\p{N}\s']/gu, ' ')     // keep letters/numbers/apostrophe
+      .toLowerCase()
+      .trim();
+
+  const tokenize = (s) =>
+    clean(s)
+      .split(/\s+/)
+      .filter(t => t.length >= 3 && !STOPWORDS.has(t));
+
+  const chunkText = (text, limit = 1900) => {
+    const chunks = [];
+    let i = 0;
+    while (i < text.length) {
+      chunks.push(text.slice(i, i + limit));
+      i += limit;
+    }
+    return chunks;
+  };
+
+  // --- fetch messages from THIS channel ---
+  let fetched = [];
+  try {
+    let lastId;
+    while (fetched.length < maxMessages) {
+      const batch = await channel.messages.fetch({ limit: Math.min(100, maxMessages - fetched.length), before: lastId });
+      if (!batch.size) break;
+
+      const arr = Array.from(batch.values());
+      fetched.push(...arr);
+
+      lastId = arr[arr.length - 1].id;
+
+      // stop early if we hit time window
+      if (sinceTs && arr[arr.length - 1].createdTimestamp < sinceTs) break;
+    }
+  } catch (e) {
+    console.error('recap fetch error:', e);
+    await interaction.editReply('❌ I couldn’t read message history in this channel (missing permissions?).');
+    return;
+  }
+
+  // Filter to human messages, within time window, non-empty
+  let messages = fetched
+    .filter(m => !m.author?.bot)
+    .filter(m => (sinceTs ? m.createdTimestamp >= sinceTs : true))
+    .filter(m => (m.content && m.content.trim().length > 0))
+    .sort((a, b) => a.createdTimestamp - b.createdTimestamp); // chronological
+
+  if (messages.length < 5) {
+    await interaction.editReply('Not enough recent messages to summarize in this channel.');
+    return;
+  }
+
+  // --- compute stats, keywords, highlights ---
+  const userCounts = {};
+  const wordCounts = {};
+  const linkCounts = {};
+  const allTokensByMsg = [];
+
+  const urlRegex = /(https?:\/\/\S+)/g;
+
+  for (const m of messages) {
+    userCounts[m.author.id] = (userCounts[m.author.id] || 0) + 1;
+
+    const links = m.content.match(urlRegex);
+    if (links) {
+      for (const l of links) linkCounts[l] = (linkCounts[l] || 0) + 1;
+    }
+
+    const toks = tokenize(m.content);
+    allTokensByMsg.push(toks);
+
+    for (const t of toks) {
+      wordCounts[t] = (wordCounts[t] || 0) + 1;
+    }
+  }
+
+  const topUsers = Object.entries(userCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([id, c]) => `<@${id}> (${c})`);
+
+  const topKeywords = Object.entries(wordCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([w, c]) => `${w}(${c})`);
+
+  const topLinks = Object.entries(linkCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([l, c]) => `${l} (${c})`);
+
+  // Score messages by keyword density (simple extractive highlight selection)
+  const keywordSet = new Set(Object.entries(wordCounts).sort((a,b)=>b[1]-a[1]).slice(0, 12).map(x => x[0]));
+
+  const scored = messages.map((m, idx) => {
+    const toks = allTokensByMsg[idx];
+    let score = 0;
+    for (const t of toks) if (keywordSet.has(t)) score += 1;
+    // small boost if contains a link (often important)
+    if (urlRegex.test(m.content)) score += 2;
+    // prefer medium-length messages
+    const len = m.content.length;
+    if (len > 40 && len < 300) score += 2;
+    return { m, score };
+  });
+
+  const highlights = scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map(({ m }) => {
+      const ts = new Date(m.createdTimestamp).toLocaleString();
+      const text = m.content.length > 180 ? m.content.slice(0, 177) + '…' : m.content;
+      return `• **${m.author.username}**: ${text}`;
+    });
+
+  // Build a “text recap” paragraph
+  const start = new Date(messages[0].createdTimestamp).toLocaleString();
+  const end = new Date(messages[messages.length - 1].createdTimestamp).toLocaleString();
+
+  const recap =
+`🧾 **Channel Recap** (#${channel.name})
+**Window:** ${start} → ${end}
+**Messages summarized:** ${messages.length}
+
+**Main themes:** ${topKeywords.length ? topKeywords.join(', ') : 'N/A'}
+**Most active:** ${topUsers.length ? topUsers.join(', ') : 'N/A'}
+
+**Highlights**
+${highlights.join('\n')}
+${topLinks.length ? `\n**Links mentioned:**\n${topLinks.map(l => `• ${l}`).join('\n')}` : ''}`;
+
+  // Send, chunk if needed
+  const parts = chunkText(recap, 1900);
+  await interaction.editReply(parts[0]);
+  for (let i = 1; i < parts.length; i++) {
+    await interaction.followUp({ content: parts[i] });
+  }
+},
+
 leaderboardHandler: async (interaction) => {
     console.info(`LEADERBOARD command invoked by guild: ${interaction.guildId}`);
 
