@@ -1,6 +1,6 @@
 const responseMessages = require('./response-messages.js');
 const queries = require('../database/queries.js');
-const { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
 const constants = require('./constants.js');
 const utilities = require('./utilities.js');
 
@@ -38,36 +38,95 @@ module.exports = {
             }
         },
 
-        downloadHandler: async (interaction, guildManager) => {
-        console.info(`DOWNLOAD command invoked by guild: ${interaction.guildId}`);
-        await interaction.deferReply({ ephemeral: true });
-        let content = '';
-        try {
-            const allQuotesFromServer = await queries.fetchAllQuotes(interaction.guildId);
-            if (allQuotesFromServer.length === 0) {
-                await interaction.followUp('There haven\'t been any quotes saved from this server, so I didn\'t attach a file.');
-                return;
-            }
-            for (const quote of allQuotesFromServer) {
-                content += await utilities.formatQuote(
-                    quote,
-                    true,
-                    true,
-                    guildManager,
-                    interaction
-                ) + '\n';
-            }
-            const buffer = Buffer.from(content);
-            await interaction.followUp({
-                files: [new AttachmentBuilder(buffer, { name: 'quotes.txt' })],
-                content: 'Here you go <:kermitGape:1406651455351558315> all the quotes saved from this server!',
-                ephemeral: false
-            });
-        } catch (e) {
-            console.error(e);
-            await interaction.followUp({ content: responseMessages.GENERIC_INTERACTION_ERROR, ephemeral: true });
+leaderboardHandler: async (interaction) => {
+    console.info(`LEADERBOARD command invoked by guild: ${interaction.guildId}`);
+
+    await interaction.deferReply();
+
+    try {
+        const results = await queries.fetchQuoteLeaderboard(
+            interaction.guildId,
+            10
+        );
+
+        if (!results.length) {
+            await interaction.editReply('No quotes found for this server.');
+            return;
         }
-    },
+
+        let message = '🏆 **Quote Leaderboard** 🏆\n\n';
+
+        results.forEach((row, index) => {
+            message +=
+                `${index + 1}. **${row.author}** — ${row.count} quotes\n`;
+        });
+
+        await interaction.editReply(message);
+
+    } catch (err) {
+        console.error('Leaderboard error:', err);
+
+        await interaction.editReply(
+            '❌ Error generating leaderboard.'
+        );
+    }
+},
+
+    downloadHandler: async (interaction, guildManager) => {
+    console.info(`DOWNLOAD command invoked by guild: ${interaction.guildId}`);
+
+    // Defer so Discord doesn't timeout
+    await interaction.deferReply();
+
+    try {
+        const allQuotes = await queries.fetchAllQuotes(interaction.guildId);
+
+        if (!allQuotes.length) {
+            await interaction.editReply('No quotes found for this server.');
+            return;
+        }
+
+        // CSV header
+        let csv = 'ID,Quote,Author,Date\n';
+
+        // Helper to escape CSV values
+        const escapeCSV = (value) => {
+            if (value === null || value === undefined) return '';
+            const str = value.toString().replace(/"/g, '""');
+            return `"${str}"`;
+        };
+
+        // Build rows
+        for (const quote of allQuotes) {
+            csv += [
+                escapeCSV(quote.id),
+                escapeCSV(quote.quotation),
+                escapeCSV(quote.author),
+                escapeCSV(quote.said_at)
+            ].join(',') + '\n';
+        }
+
+        const buffer = Buffer.from(csv, 'utf8');
+
+        // Send CSV file
+        await interaction.editReply({
+            content: '📄 Here is your quote export (CSV format):',
+            files: [
+                new AttachmentBuilder(buffer, {
+                    name: 'quotes.csv'
+                })
+            ]
+        });
+
+    } catch (err) {
+        console.error('CSV download error:', err);
+
+        await interaction.editReply(
+            '❌ There was an error generating the CSV file.'
+        );
+    }
+},
+
     
     addHandler: async (interaction) => {
   console.info(`ADD command invoked by guild: ${interaction.guildId}`);
@@ -144,23 +203,59 @@ module.exports = {
     },
 
     randomHandler: async (interaction) => {
-        console.info(`RANDOM command invoked by guild: ${interaction.guildId}`);
-        const author = interaction.options.getString('author')?.trim();
-        try {
-            const queryResult = author && author.length > 0
-                ? await queries.getQuotesFromAuthor(author, interaction.guildId)
-                : await queries.fetchAllQuotes(interaction.guildId);
-            if (queryResult.length > 0) {
-                const randomQuote = queryResult[Math.floor(Math.random() * queryResult.length)];
-                await interaction.reply(await utilities.formatQuote(randomQuote, true));
-            } else {
-                await interaction.reply(responseMessages.NO_QUOTES_BY_AUTHOR);
-            }
-        } catch (e) {
-            console.error(e);
-            await interaction.reply(responseMessages.RANDOM_QUOTE_GENERIC_ERROR);
+    console.info(`QUOTE/RANDOM command invoked by guild: ${interaction.guildId}`);
+
+    await interaction.deferReply();
+
+    try {
+        // Get matching quotes (or random)
+        const results = await utilities.getQuoteSearchResults(interaction);
+
+        if (!results.length) {
+            await interaction.editReply('❌ No matching quotes found.');
+            return;
         }
-    },
+
+        // Pick random if multiple
+        const quote =
+            results.length === 1
+                ? results[0]
+                : results[Math.floor(Math.random() * results.length)];
+
+        const embed = new EmbedBuilder()
+            .setColor(0x2B6CB0)
+            .setTitle(`📜 Quote #${quote.id}`)
+            .setDescription(`“${quote.quotation}”`)
+            .addFields(
+                {
+                    name: 'Author',
+                    value: quote.author || 'Unknown',
+                    inline: true
+                },
+                {
+                    name: 'Date',
+                    value: quote.said_at
+                        ? new Date(quote.said_at).toLocaleDateString()
+                        : 'Unknown',
+                    inline: true
+                }
+            )
+            .setFooter({ text: 'BeechBot Quotes' })
+            .setTimestamp();
+
+        await interaction.editReply({
+            embeds: [embed]
+        });
+
+    } catch (err) {
+        console.error('Quote embed error:', err);
+
+        await interaction.editReply(
+            '❌ There was an error retrieving this quote.'
+        );
+    }
+},
+
 
     searchHandler: async (interaction) => {
   console.info(`SEARCH command invoked by guild: ${interaction.guildId}`);
@@ -209,55 +304,70 @@ module.exports = {
 },
 
     deleteHandler: async (interaction) => {
-        await interaction.deferReply();
-        console.info(`DELETE command invoked by guild: ${interaction.guildId}`);
-        let searchResults;
-        try {
-            searchResults = await utilities.getQuoteSearchResults(interaction);
-        } catch (e) {
-            console.error(e);
-            await interaction.followUp({ content: responseMessages.GENERIC_INTERACTION_ERROR });
-            return;
-        }
-        if (searchResults.length === 0) {
-            await interaction.followUp(responseMessages.EMPTY_QUERY);
-            return;
-        } else if (searchResults.length > constants.MAX_DELETE_SEARCH_RESULTS) {
-            await interaction.followUp(responseMessages.DELETE_QUERY_TOO_GENERAL);
-            return;
-        }
-        const replyComponents = await utilities.buildDeleteInteraction(searchResults);
-        if (replyComponents.replyText.length > constants.MAX_DISCORD_MESSAGE_LENGTH) {
-            await interaction.followUp({ content: responseMessages.DELETE_SEARCH_RESULT_TOO_LONG });
-            return;
-        }
-        const response = await interaction.followUp({
-            content: replyComponents.replyText,
-            components: [new ActionRowBuilder().addComponents(replyComponents.buttons)]
+    console.info(`DELETE command invoked by guild: ${interaction.guildId}`);
+
+    await interaction.deferReply();
+
+    let searchResults;
+    try {
+        searchResults = await utilities.getQuoteSearchResults(interaction);
+    } catch (e) {
+        console.error(e);
+        await interaction.editReply({ content: responseMessages.GENERIC_INTERACTION_ERROR, components: [] });
+        return;
+    }
+
+    if (searchResults.length === 0) {
+        await interaction.editReply({ content: responseMessages.EMPTY_QUERY, components: [] });
+        return;
+    } else if (searchResults.length > constants.MAX_DELETE_SEARCH_RESULTS) {
+        await interaction.editReply({ content: responseMessages.DELETE_QUERY_TOO_GENERAL, components: [] });
+        return;
+    }
+
+    const replyComponents = await utilities.buildDeleteInteraction(searchResults);
+
+    if (replyComponents.replyText.length > constants.MAX_DISCORD_MESSAGE_LENGTH) {
+        await interaction.editReply({ content: responseMessages.DELETE_SEARCH_RESULT_TOO_LONG, components: [] });
+        return;
+    }
+
+    // Use editReply so the deferred message becomes the interactive one.
+    const response = await interaction.editReply({
+        content: replyComponents.replyText,
+        components: [new ActionRowBuilder().addComponents(replyComponents.buttons)]
+    });
+
+    const collectorFilter = i => i.user.id === interaction.user.id;
+
+    try {
+        const choice = await response.awaitMessageComponent({ filter: collectorFilter, time: 60_000 });
+
+        queries.deleteQuoteById(choice.customId, interaction.guildId)
+            .then(async (result) => {
+                if (result.length === 0) {
+                    await choice.update({ content: responseMessages.NOTHING_DELETED, components: [] });
+                } else {
+                    await choice.update({
+                        content: 'The following quote was deleted: \n\n' +
+                            await utilities.formatQuote(result[0], true),
+                        components: []
+                    });
+                }
+            })
+            .catch(async (e) => {
+                console.error(e);
+                await choice.update({ content: responseMessages.GENERIC_INTERACTION_ERROR, components: [] });
+            });
+
+    } catch (e) {
+        await interaction.editReply({
+            content: 'A quote was not chosen within 60 seconds, so I cancelled the interaction.',
+            components: []
         });
-        const collectorFilter = i => i.user.id === interaction.user.id;
-        try {
-            const choice = await response.awaitMessageComponent({ filter: collectorFilter, time: 60_000 });
-            queries.deleteQuoteById(choice.customId, interaction.guildId)
-                .then(async (result) => {
-                    if (result.length === 0) {
-                        await choice.update({ content: responseMessages.NOTHING_DELETED, components: [] });
-                    } else {
-                        await choice.update({
-                            content: 'The following quote was deleted: \n\n' +
-                                await utilities.formatQuote(result[0], true),
-                            components: []
-                        });
-                    }
-                })
-                .catch(async (e) => {
-                    console.error(e);
-                    await choice.update({ content: responseMessages.GENERIC_INTERACTION_ERROR, ephemeral: false, components: [] });
-                });
-        } catch (e) {
-            await interaction.editReply({ content: 'A quote was not chosen within 60 seconds, so I cancelled the interaction.', components: [] });
-        }
-    },
+    }
+},
+
 
     editHandler: async (interaction) => {
   console.info(`EDIT command invoked by guild: ${interaction.guildId}`);
