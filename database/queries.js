@@ -2,6 +2,18 @@ const pool = require('./db');
 
 module.exports = {
 
+ fetchQuotesByAuthor: (author, guildId) => {
+    return query({
+        text: `
+            SELECT quotation
+            FROM quotes
+            WHERE author = $1
+              AND guild_id = $2;
+        `,
+        values: [author, guildId]
+    });
+},   
+
     fetchAllQuotes: (guildId) => {
         return query({
             text: 'SELECT * FROM quotes WHERE guild_id = $1;',

@@ -557,49 +557,76 @@ leaderboardHandler: async (interaction) => {
 wordcloudHandler: async (interaction) => {
   console.info(`WORDCLOUD command invoked by guild: ${interaction.guildId}`);
 
-  // If any dependency is missing, exit gracefully BEFORE deferring.
+  // If any dependency is missing, exit gracefully
   if (!wordcloudConstructor || !JSDOM || !sharp) {
     const { MessageFlags } = require('discord.js');
+
     await interaction.reply({
       content: 'Wordcloud feature is not available on this deployment.',
       flags: MessageFlags.Ephemeral
     });
+
     return;
   }
 
-  await interaction.deferReply(); // we’ll edit this later
+  await interaction.deferReply();
 
   const author = interaction.options.getString('author')?.trim();
-  const quotesForCloud = (author && author.length > 0)
-    ? await queries.getQuotesFromAuthor(author, interaction.guildId)
-    : await queries.fetchAllQuotes(interaction.guildId);
 
+  let quotesForCloud;
+
+  // ---- Fetch quotes safely ----
+  try {
+    if (author && author.length > 0) {
+      quotesForCloud = await queries.fetchQuotesByAuthor(
+        author,
+        interaction.guildId
+      );
+    } else {
+      quotesForCloud = await queries.fetchAllQuotes(
+        interaction.guildId
+      );
+    }
+  } catch (err) {
+    console.error('Wordcloud DB error:', err);
+
+    await interaction.editReply(
+      '❌ Error retrieving quotes for wordcloud.'
+    );
+
+    return;
+  }
+
+  // ---- No data case ----
   if (!quotesForCloud || quotesForCloud.length === 0) {
-    const { MessageFlags } = require('discord.js');
-    // since we deferred, use editReply (you can’t mark edited replies ephemeral;
-    // send a follow-up ephemeral instead if you prefer keeping it private)
-    await interaction.editReply('There were no quotes to generate a word cloud.');
-    await interaction.followUp({
-      content: 'Tip: use `/save` to add quotes, then try again.',
-      flags: MessageFlags.Ephemeral
-    });
+    await interaction.editReply(
+      'There were no quotes to generate a word cloud.'
+    );
+
     return;
   }
 
   try {
     const nodeDocument = new JSDOM().window.document;
-    const wordsWithOccurrences = utilities.mapQuotesToFrequencies(quotesForCloud);
 
-    // your module can be a value or a promise; await works either way
+    // Convert quotes → word frequencies
+    const wordsWithOccurrences =
+      utilities.mapQuotesToFrequencies(quotesForCloud);
+
     const constructor = await wordcloudConstructor;
 
     const initializationResult = constructor.initialize(
       wordsWithOccurrences
-        .sort((a, b) => a.frequency >= b.frequency ? -1 : 1)
+        .sort((a, b) => b.frequency - a.frequency)
         .slice(0, constants.MAX_WORDCLOUD_WORDS),
+
       constants.WORDCLOUD_SIZE,
       nodeDocument,
-      interaction.options.getString('font')?.toLowerCase().trim()
+
+      interaction.options
+        .getString('font')
+        ?.toLowerCase()
+        .trim()
     );
 
     initializationResult.cloud.on('end', () => {
@@ -607,7 +634,11 @@ wordcloudHandler: async (interaction) => {
         initializationResult.cloud,
         initializationResult.words,
         nodeDocument.body,
-        interaction.options.getString('font')?.toLowerCase().trim()
+
+        interaction.options
+          .getString('font')
+          ?.toLowerCase()
+          .trim()
       );
 
       const buffer = Buffer.from(
@@ -618,32 +649,50 @@ wordcloudHandler: async (interaction) => {
         .resize(constants.WORDCLOUD_SIZE, constants.WORDCLOUD_SIZE)
         .png()
         .toBuffer()
-        .then(async (data) => {
-          let content = author && author.length > 0
-            ? `Here’s a word cloud for quotes said by “${author}”!`
-            : `Here’s a word cloud generated from all quotes!`;
 
-          const reqFont = interaction.options.getString('font')?.toLowerCase().trim();
+        .then(async (data) => {
+
+          let content = author && author.length > 0
+            ? `☁️ Wordcloud for quotes by **${author}**`
+            : `☁️ Wordcloud for all quotes`;
+
+          const reqFont = interaction.options
+            .getString('font')
+            ?.toLowerCase()
+            .trim();
+
           if (reqFont && !constructor.CONFIG.FONTS[reqFont]) {
-            content += ' I can’t use that font. Available fonts: Arial, Baskerville Old Face, Calibri, Century Gothic, Comic Sans MS, Consolas, Courier New, Georgia, Impact, Rockwell, Segoe UI, Tahoma, Times New Roman, Trebuchet MS, Verdana.';
+            content +=
+              '\n⚠️ Unknown font requested. Using default.';
           }
 
-          // Since we deferred, edit the original reply with the image
           await interaction.editReply({
-            files: [new AttachmentBuilder(data, { name: 'wordcloud.png' })],
+            files: [
+              new AttachmentBuilder(data, {
+                name: 'wordcloud.png'
+              })
+            ],
             content
           });
         })
+
         .catch(async (err) => {
-          console.error(err);
-          await interaction.editReply({ content: responseMessages.GENERIC_INTERACTION_ERROR });
+          console.error('Sharp error:', err);
+
+          await interaction.editReply(
+            responseMessages.GENERIC_INTERACTION_ERROR
+          );
         });
     });
 
     initializationResult.cloud.start();
+
   } catch (e) {
-    console.error(e);
-    await interaction.editReply({ content: responseMessages.GENERIC_INTERACTION_ERROR });
+    console.error('Wordcloud generation error:', e);
+
+    await interaction.editReply(
+      responseMessages.GENERIC_INTERACTION_ERROR
+    );
   }
-}
+},
 };
