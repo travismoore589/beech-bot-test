@@ -1,6 +1,6 @@
 const responseMessages = require('./response-messages.js');
 const queries = require('../database/queries.js');
-const { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder } = require('discord.js');
+const { AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const constants = require('./constants.js');
 const utilities = require('./utilities.js');
 
@@ -203,59 +203,23 @@ leaderboardHandler: async (interaction) => {
     },
 
     randomHandler: async (interaction) => {
-    console.info(`QUOTE/RANDOM command invoked by guild: ${interaction.guildId}`);
-
-    await interaction.deferReply();
-
-    try {
-        // Get matching quotes (or random)
-        const results = await utilities.getQuoteSearchResults(interaction);
-
-        if (!results.length) {
-            await interaction.editReply('❌ No matching quotes found.');
-            return;
+        console.info(`RANDOM command invoked by guild: ${interaction.guildId}`);
+        const author = interaction.options.getString('author')?.trim();
+        try {
+            const queryResult = author && author.length > 0
+                ? await queries.getQuotesFromAuthor(author, interaction.guildId)
+                : await queries.fetchAllQuotes(interaction.guildId);
+            if (queryResult.length > 0) {
+                const randomQuote = queryResult[Math.floor(Math.random() * queryResult.length)];
+                await interaction.reply(await utilities.formatQuote(randomQuote, true));
+            } else {
+                await interaction.reply(responseMessages.NO_QUOTES_BY_AUTHOR);
+            }
+        } catch (e) {
+            console.error(e);
+            await interaction.reply(responseMessages.RANDOM_QUOTE_GENERIC_ERROR);
         }
-
-        // Pick random if multiple
-        const quote =
-            results.length === 1
-                ? results[0]
-                : results[Math.floor(Math.random() * results.length)];
-
-        const embed = new EmbedBuilder()
-            .setColor(0x2B6CB0)
-            .setTitle(`📜 Quote #${quote.id}`)
-            .setDescription(`“${quote.quotation}”`)
-            .addFields(
-                {
-                    name: 'Author',
-                    value: quote.author || 'Unknown',
-                    inline: true
-                },
-                {
-                    name: 'Date',
-                    value: quote.said_at
-                        ? new Date(quote.said_at).toLocaleDateString()
-                        : 'Unknown',
-                    inline: true
-                }
-            )
-            .setFooter({ text: 'BeechBot Quotes' })
-            .setTimestamp();
-
-        await interaction.editReply({
-            embeds: [embed]
-        });
-
-    } catch (err) {
-        console.error('Quote embed error:', err);
-
-        await interaction.editReply(
-            '❌ There was an error retrieving this quote.'
-        );
-    }
-},
-
+    },
 
     searchHandler: async (interaction) => {
   console.info(`SEARCH command invoked by guild: ${interaction.guildId}`);
